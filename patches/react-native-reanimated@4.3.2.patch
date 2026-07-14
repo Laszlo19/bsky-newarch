@@ -1,0 +1,412 @@
+diff --git a/Common/cpp/reanimated/Fabric/updates/AnimatedPropsRegistry.cpp b/Common/cpp/reanimated/Fabric/updates/AnimatedPropsRegistry.cpp
+index 531f0dc7b4eeb9b29cb2255d8444da02a74c35b7..64a903157d8831fcf882c0d5198e777414808a27 100644
+--- a/Common/cpp/reanimated/Fabric/updates/AnimatedPropsRegistry.cpp
++++ b/Common/cpp/reanimated/Fabric/updates/AnimatedPropsRegistry.cpp
+@@ -2,6 +2,7 @@
+ #include <reanimated/Tools/FeatureFlags.h>
+ 
+ #include <memory>
++#include <tuple>
+ #include <utility>
+ 
+ namespace reanimated {
+@@ -25,7 +26,13 @@ void AnimatedPropsRegistry::update(jsi::Runtime &rt, const jsi::Value &operation
+     addUpdatesToBatch(shadowNode, jsi::dynamicFromValue(rt, updates));
+ 
+     if constexpr (StaticFeatureFlags::getFlag("FORCE_REACT_RENDER_FOR_SETTLED_ANIMATIONS")) {
+-      timestampMap_[shadowNode->getTag()] = timestamp;
++      const auto tag = shadowNode->getTag();
++      timestampMap_[tag] = timestamp;
++      // If JS already has a `settledProps` snapshot for this tag, it is now
++      // stale — schedule a refresh on the next `getUpdatesOlderThanTimestamp`.
++      if (syncedTags_.erase(tag) > 0) {
++        invalidatedTags_.insert(tag);
++      }
+     }
+   }
+ }
+@@ -37,22 +44,40 @@ jsi::Value AnimatedPropsRegistry::getUpdatesOlderThanTimestamp(
+   std::lock_guard<std::mutex> lock{mutex_};
+   removeUpdatesOlderThanTimestamp(cleanupTimestamp);
+ 
+-  std::vector<std::pair<Tag, std::reference_wrapper<const folly::dynamic>>> updates;
++  // Each returned tag is paired with whether it came from the settled path —
++  // only settled-path tags are tracked as "synced" so that an ongoing animation
++  // doesn't re-trigger an invalidation/sync on every GC tick.
++  std::vector<std::tuple<Tag, std::reference_wrapper<const folly::dynamic>, bool>> updates;
+ 
+   for (const auto &[viewTag, pair] : updatesRegistry_) {
+     auto it = timestampMap_.find(viewTag);
+-    if (it != timestampMap_.end() && it->second < timestamp) {
+-      updates.emplace_back(viewTag, std::cref(pair.second));
++    if (it == timestampMap_.end()) {
++      continue;
++    }
++    const bool isSettled = it->second < timestamp;
++    const auto invalidatedIt = invalidatedTags_.find(viewTag);
++    const bool isStaleSynced = invalidatedIt != invalidatedTags_.end();
++    if (isSettled || isStaleSynced) {
++      updates.emplace_back(viewTag, std::cref(pair.second), isSettled);
++      if (isStaleSynced) {
++        // Only erase serviced invalidations; if a tag was invalidated but the
++        // matching update batch hasn't been flushed into updatesRegistry_ yet,
++        // we leave the entry so the next sync picks it up.
++        invalidatedTags_.erase(invalidatedIt);
++      }
+     }
+   }
+ 
+   const jsi::Array array(rt, updates.size());
+   size_t i = 0;
+-  for (const auto &[viewTag, styleProps] : updates) {
++  for (const auto &[viewTag, styleProps, isSettled] : updates) {
+     const jsi::Object item(rt);
+     item.setProperty(rt, "viewTag", viewTag);
+     item.setProperty(rt, "styleProps", jsi::valueFromDynamic(rt, styleProps.get()));
+     array.setValueAtIndex(rt, i++, item);
++    if (isSettled) {
++      syncedTags_.insert(viewTag);
++    }
+   }
+ 
+   return jsi::Value(rt, array);
+@@ -62,7 +87,8 @@ void AnimatedPropsRegistry::removeUpdatesOlderThanTimestamp(const double timesta
+   for (auto it = timestampMap_.begin(); it != timestampMap_.end();) {
+     const auto viewTag = it->first;
+     const auto viewTimestamp = it->second;
+-    if (viewTimestamp < timestamp) {
++
++    if (viewTimestamp < timestamp && syncedTags_.count(viewTag) > 0) {
+       it = timestampMap_.erase(it);
+       updatesRegistry_.erase(viewTag);
+     } else {
+@@ -74,6 +100,8 @@ void AnimatedPropsRegistry::removeUpdatesOlderThanTimestamp(const double timesta
+ void AnimatedPropsRegistry::removeTag(const Tag tag) {
+   updatesRegistry_.erase(tag);
+   timestampMap_.erase(tag);
++  syncedTags_.erase(tag);
++  invalidatedTags_.erase(tag);
+ }
+ 
+ } // namespace reanimated
+diff --git a/Common/cpp/reanimated/Fabric/updates/AnimatedPropsRegistry.h b/Common/cpp/reanimated/Fabric/updates/AnimatedPropsRegistry.h
+index 2c6c0e13604c9421e147d7eea7f4a4752288011c..da69e9119f200bb11878455232cf975f6f2c0042 100644
+--- a/Common/cpp/reanimated/Fabric/updates/AnimatedPropsRegistry.h
++++ b/Common/cpp/reanimated/Fabric/updates/AnimatedPropsRegistry.h
+@@ -7,6 +7,7 @@
+ #include <memory>
+ #include <string>
+ #include <unordered_map>
++#include <unordered_set>
+ #include <vector>
+ 
+ namespace reanimated {
+@@ -20,6 +21,11 @@ class AnimatedPropsRegistry : public UpdatesRegistry {
+ 
+  private:
+   std::unordered_map<Tag, double> timestampMap_; // viewTag -> timestamp, protected by `mutex_`
++  // Tags whose latest values have already been pushed to React `settledProps`.
++  std::unordered_set<Tag> syncedTags_;
++  // Tags that were synced to React but received a fresh worklet update since;
++  // their `settledProps` are stale and need to be refreshed on the next sync.
++  std::unordered_set<Tag> invalidatedTags_;
+ 
+   void removeUpdatesOlderThanTimestamp(double timestamp);
+   void removeTag(Tag tag) override;
+diff --git a/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxyCommon.h b/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxyCommon.h
+index 096218ab9659955cd6272c97181bce3c893ed591..1a8e25fc8295b3ac943130709bf063ea41a50585 100644
+--- a/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxyCommon.h
++++ b/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxyCommon.h
+@@ -57,11 +57,11 @@ class LayoutAnimationsProxyCommon : public facebook::react::MountingOverrideDele
+       const SharedComponentDescriptorRegistry &componentDescriptorRegistry,
+       const std::shared_ptr<const ContextContainer> &contextContainer,
+       jsi::Runtime &uiRuntime,
+-      const std::shared_ptr<UIScheduler> &uiScheduler
++      const std::shared_ptr<UIScheduler> &uiScheduler,
++      const std::shared_ptr<facebook::react::UIManager> &uiManager
+ #ifdef ANDROID
+       ,
+       const PreserveMountedTagsFunction &filterUnmountedTagsFunction,
+-      const std::shared_ptr<facebook::react::UIManager> &uiManager,
+       const std::shared_ptr<facebook::react::CallInvoker> &jsInvoker
+ #endif
+       )
+@@ -69,11 +69,11 @@ class LayoutAnimationsProxyCommon : public facebook::react::MountingOverrideDele
+         contextContainer_(contextContainer),
+         componentDescriptorRegistry_(componentDescriptorRegistry),
+         uiRuntime_(uiRuntime),
+-        uiScheduler_(uiScheduler)
++        uiScheduler_(uiScheduler),
++        uiManager_(uiManager)
+ #ifdef ANDROID
+         ,
+         preserveMountedTags_(filterUnmountedTagsFunction),
+-        uiManager_(uiManager),
+         jsInvoker_(jsInvoker)
+ #endif
+   {
+@@ -93,10 +93,10 @@ class LayoutAnimationsProxyCommon : public facebook::react::MountingOverrideDele
+   SharedComponentDescriptorRegistry componentDescriptorRegistry_;
+   jsi::Runtime &uiRuntime_;
+   const std::shared_ptr<UIScheduler> uiScheduler_;
++  std::shared_ptr<facebook::react::UIManager> uiManager_;
+   PreserveMountedTagsFunction preserveMountedTags_;
+ 
+ #ifdef ANDROID
+-  std::shared_ptr<facebook::react::UIManager> uiManager_;
+   std::shared_ptr<facebook::react::CallInvoker> jsInvoker_;
+ 
+   void restoreOpacityInCaseOfFlakyEnteringAnimation(SurfaceId surfaceId) const;
+diff --git a/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Experimental.h b/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Experimental.h
+index eca44e4cf651d16e9741806004ce9119c85d07d6..e39c79a5d7b52659106ed6fe6fbcbbc048bf4787 100644
+--- a/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Experimental.h
++++ b/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Experimental.h
+@@ -66,11 +66,11 @@ struct LayoutAnimationsProxy_Experimental : public LayoutAnimationsProxyCommon,
+       const SharedComponentDescriptorRegistry &componentDescriptorRegistry,
+       const std::shared_ptr<const ContextContainer> &contextContainer,
+       jsi::Runtime &uiRuntime,
+-      const std::shared_ptr<UIScheduler> &uiScheduler
++      const std::shared_ptr<UIScheduler> &uiScheduler,
++      const std::shared_ptr<UIManager> &uiManager
+ #ifdef ANDROID
+       ,
+       const PreserveMountedTagsFunction &filterUnmountedTagsFunction,
+-      const std::shared_ptr<UIManager> &uiManager,
+       const std::shared_ptr<CallInvoker> &jsInvoker
+ #endif
+       )
+@@ -79,11 +79,11 @@ struct LayoutAnimationsProxy_Experimental : public LayoutAnimationsProxyCommon,
+             componentDescriptorRegistry,
+             contextContainer,
+             uiRuntime,
+-            uiScheduler
++            uiScheduler,
++            uiManager
+ #ifdef ANDROID
+             ,
+             filterUnmountedTagsFunction,
+-            uiManager,
+             jsInvoker
+ #endif
+             ),
+diff --git a/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Legacy.cpp b/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Legacy.cpp
+index 83ef7430b923b6b3b99368ee8072168769110cd0..2affd12822ab19bdc90963d3ce8ca1e6bb0d43b7 100644
+--- a/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Legacy.cpp
++++ b/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Legacy.cpp
+@@ -2,6 +2,7 @@
+ #include <reanimated/NativeModules/ReanimatedModuleProxy.h>
+ 
+ #include <react/renderer/animations/utils.h>
++#include <react/renderer/mounting/ShadowTree.h>
+ #include <react/renderer/mounting/ShadowViewMutation.h>
+ 
+ #include <memory>
+@@ -53,14 +54,37 @@ std::optional<MountingTransaction> LayoutAnimationsProxy_Legacy::pullTransaction
+ 
+   parseRemoveMutations(movedViews, mutations, roots);
+ 
+-  auto shouldAnimate = !surfacesToRemove_.contains(surfaceId);
+-  surfacesToRemove_.erase(surfaceId);
++  // Consume the teardown mark only on the transaction that actually clears
++  // the root — pulls emitted for animation frames must not eat it early.
++  auto shouldAnimate = true;
++  const auto removesRootChildren = std::ranges::any_of(mutations, [surfaceId](const auto &mutation) {
++    return mutation.type == ShadowViewMutation::Remove && mutation.parentTag == surfaceId;
++  });
++  if (removesRootChildren) {
++    shouldAnimate = surfacesToRemove_.erase(surfaceId) == 0;
++  }
+   handleRemovals(filteredMutations, roots, deadNodes, shouldAnimate);
+ 
+   handleUpdatesAndEnterings(filteredMutations, movedViews, mutations, propsParserContext, surfaceId);
+ 
+   addOngoingAnimations(surfaceId, filteredMutations);
+ 
++  // The LayoutAnimationDriver can emit a final keyframe update in the same
++  // transaction as the deferred Remove/Delete it withheld for a delete
++  // animation. We emit removals before updates, so such an update would
++  // otherwise reach the mounting layer after its view was deleted.
++  std::unordered_set<Tag> deletedTags;
++  for (const auto &mutation : filteredMutations) {
++    if (mutation.type == ShadowViewMutation::Delete) {
++      deletedTags.insert(mutation.oldChildShadowView.tag);
++    }
++  }
++  if (!deletedTags.empty()) {
++    std::erase_if(filteredMutations, [&deletedTags](const auto &mutation) {
++      return mutation.type == ShadowViewMutation::Update && deletedTags.contains(mutation.newChildShadowView.tag);
++    });
++  }
++
+   return MountingTransaction{surfaceId, transactionNumber, std::move(filteredMutations), telemetry};
+ }
+ 
+@@ -947,23 +971,22 @@ inline bool MutationNode::isMutationNode() {
+   return true;
+ }
+ 
+-// UIManagerAnimationDelegate
+-
+-void LayoutAnimationsProxy_Legacy::uiManagerDidConfigureNextLayoutAnimation(
+-    jsi::Runtime &runtime,
+-    const RawValue &config,
+-    const jsi::Value &successCallbackValue,
+-    const jsi::Value &failureCallbackValue) const {}
++// UIManagerCommitHook
+ 
+-void LayoutAnimationsProxy_Legacy::setComponentDescriptorRegistry(
+-    const SharedComponentDescriptorRegistry &componentDescriptorRegistry) {}
+-
+-bool LayoutAnimationsProxy_Legacy::shouldAnimateFrame() const {
+-  return false;
+-}
+-
+-void LayoutAnimationsProxy_Legacy::stopSurface(SurfaceId surfaceId) {
+-  surfacesToRemove_.insert(surfaceId);
++// Surface teardown commits an empty root (SurfaceHandler::stop) before the
++// teardown transaction is pulled — mark it so pullTransaction skips exit
++// animations. Reading the ShadowTreeRegistry here instead would deadlock (#8579).
++RootShadowNode::Unshared LayoutAnimationsProxy_Legacy::shadowTreeWillCommit(
++    const ShadowTree &shadowTree,
++    const RootShadowNode::Shared & /*oldRootShadowNode*/,
++    const RootShadowNode::Unshared &newRootShadowNode) noexcept {
++  auto lock = std::unique_lock<std::recursive_mutex>(mutex);
++  if (newRootShadowNode->getChildren().empty()) {
++    surfacesToRemove_.insert(shadowTree.getSurfaceId());
++  } else {
++    surfacesToRemove_.erase(shadowTree.getSurfaceId());
++  }
++  return newRootShadowNode;
+ }
+ 
+ } // namespace reanimated
+diff --git a/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Legacy.h b/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Legacy.h
+index e9a5e9959e89ec33cee179ddb907c17f6dfbd3de..a2c89041518cd71e8ba5ac62ef89c0022d197c9b 100644
+--- a/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Legacy.h
++++ b/Common/cpp/reanimated/LayoutAnimations/LayoutAnimationsProxy_Legacy.h
+@@ -3,8 +3,8 @@
+ #include <react/renderer/componentregistry/ComponentDescriptorFactory.h>
+ #include <react/renderer/mounting/MountingOverrideDelegate.h>
+ #include <react/renderer/scheduler/Scheduler.h>
+-#include <react/renderer/uimanager/UIManagerAnimationDelegate.h>
+ #include <react/renderer/uimanager/UIManagerBinding.h>
++#include <react/renderer/uimanager/UIManagerCommitHook.h>
+ #include <reanimated/Compat/WorkletsApi.h>
+ #include <reanimated/LayoutAnimations/LayoutAnimationsManager.h>
+ #include <reanimated/LayoutAnimations/LayoutAnimationsProxyCommon.h>
+@@ -102,7 +102,7 @@ struct SurfaceContext {
+ };
+ 
+ struct LayoutAnimationsProxy_Legacy : public LayoutAnimationsProxyCommon,
+-                                      public UIManagerAnimationDelegate,
++                                      public UIManagerCommitHook,
+                                       public std::enable_shared_from_this<LayoutAnimationsProxy_Legacy> {
+   mutable std::unordered_map<Tag, std::shared_ptr<Node>> nodeForTag_;
+   mutable std::recursive_mutex mutex;
+@@ -116,11 +116,11 @@ struct LayoutAnimationsProxy_Legacy : public LayoutAnimationsProxyCommon,
+       const SharedComponentDescriptorRegistry &componentDescriptorRegistry,
+       const std::shared_ptr<const ContextContainer> &contextContainer,
+       jsi::Runtime &uiRuntime,
+-      const std::shared_ptr<UIScheduler> &uiScheduler
++      const std::shared_ptr<UIScheduler> &uiScheduler,
++      const std::shared_ptr<UIManager> &uiManager
+ #ifdef ANDROID
+       ,
+       const PreserveMountedTagsFunction &filterUnmountedTagsFunction,
+-      const std::shared_ptr<UIManager> &uiManager,
+       const std::shared_ptr<CallInvoker> &jsInvoker
+ #endif
+       )
+@@ -129,14 +129,19 @@ struct LayoutAnimationsProxy_Legacy : public LayoutAnimationsProxyCommon,
+             componentDescriptorRegistry,
+             contextContainer,
+             uiRuntime,
+-            uiScheduler
++            uiScheduler,
++            uiManager
+ #ifdef ANDROID
+             ,
+             filterUnmountedTagsFunction,
+-            uiManager,
+             jsInvoker
+ #endif
+         ) {
++    uiManager->registerCommitHook(*this);
++  }
++
++  ~LayoutAnimationsProxy_Legacy() override {
++    uiManager_->unregisterCommitHook(*this);
+   }
+ 
+   void startEnteringAnimation(const int tag, ShadowViewMutation &mutation) const;
+@@ -202,19 +207,15 @@ struct LayoutAnimationsProxy_Legacy : public LayoutAnimationsProxyCommon,
+       const TransactionTelemetry &telemetry,
+       ShadowViewMutationList mutations) const override;
+ 
+-  // UIManagerAnimationDelegate
+-
+-  void uiManagerDidConfigureNextLayoutAnimation(
+-      jsi::Runtime &runtime,
+-      const RawValue &config,
+-      const jsi::Value &successCallbackValue,
+-      const jsi::Value &failureCallbackValue) const override;
+-
+-  void setComponentDescriptorRegistry(const SharedComponentDescriptorRegistry &componentDescriptorRegistry) override;
++  // UIManagerCommitHook
+ 
+-  bool shouldAnimateFrame() const override;
++  void commitHookWasRegistered(const UIManager &uiManager) noexcept override {}
++  void commitHookWasUnregistered(const UIManager &uiManager) noexcept override {}
+ 
+-  void stopSurface(SurfaceId surfaceId) override;
++  RootShadowNode::Unshared shadowTreeWillCommit(
++      const ShadowTree &shadowTree,
++      const RootShadowNode::Shared &oldRootShadowNode,
++      const RootShadowNode::Unshared &newRootShadowNode) noexcept override;
+ };
+ 
+ } // namespace reanimated
+diff --git a/Common/cpp/reanimated/NativeModules/ReanimatedModuleProxy.cpp b/Common/cpp/reanimated/NativeModules/ReanimatedModuleProxy.cpp
+index 9ade22bf773005613048a00c47b35767628e86c6..688fdfb82715261fd08a63126c8691b0095fbf56 100644
+--- a/Common/cpp/reanimated/NativeModules/ReanimatedModuleProxy.cpp
++++ b/Common/cpp/reanimated/NativeModules/ReanimatedModuleProxy.cpp
+@@ -1306,11 +1306,11 @@ void ReanimatedModuleProxy::initializeLayoutAnimationsProxy() {
+           componentDescriptorRegistry,
+           scheduler->getContextContainer(),
+           getJSIRuntimeFromWorkletRuntime(uiRuntime_),
+-          uiScheduler_
++          uiScheduler_,
++          uiManager_
+ #ifdef ANDROID
+           ,
+           filterUnmountedTagsFunction_,
+-          uiManager_,
+           jsInvoker_
+ #endif
+       );
+@@ -1319,22 +1319,19 @@ void ReanimatedModuleProxy::initializeLayoutAnimationsProxy() {
+ #endif
+       layoutAnimationsProxy_ = std::move(layoutAnimationsProxyExperimental);
+     } else {
+-      auto layoutAnimationsProxyLegacy = std::make_shared<LayoutAnimationsProxy_Legacy>(
++      layoutAnimationsProxy_ = std::make_shared<LayoutAnimationsProxy_Legacy>(
+           layoutAnimationsManager_,
+           componentDescriptorRegistry,
+           scheduler->getContextContainer(),
+           getJSIRuntimeFromWorkletRuntime(uiRuntime_),
+-          uiScheduler_
++          uiScheduler_,
++          uiManager_
+ #ifdef ANDROID
+           ,
+           filterUnmountedTagsFunction_,
+-          uiManager_,
+           jsInvoker_
+ #endif
+       );
+-      // TODO (future): support in experimental
+-      uiManager_->setAnimationDelegate(layoutAnimationsProxyLegacy.get());
+-      layoutAnimationsProxy_ = std::move(layoutAnimationsProxyLegacy);
+     }
+   }
+ }

@@ -450,8 +450,8 @@ importers:
         specifier: ~8.0.8
         version: 8.0.8(expo@54.0.35(@babel/core@7.29.0)(react-native-webview@13.15.0(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       expo-contacts:
-        specifier: ^15.0.10
-        version: 15.0.11(expo@54.0.35(@babel/core@7.29.0)(react-native-webview@13.15.0(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
+        specifier: ^57.0.2
+        version: 57.0.2(expo@54.0.35(@babel/core@7.29.0)(react-native-webview@13.15.0(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       expo-dev-client:
         specifier: ~6.0.20
         version: 6.0.21(expo@54.0.35(@babel/core@7.29.0)(react-native-webview@13.15.0(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))
@@ -5382,8 +5382,8 @@ packages:
       expo: '*'
       react-native: '*'
 
-  expo-contacts@15.0.11:
-    resolution: {integrity: sha512-buKkoQuWJgVSEvR1Yloa5SvGC/ud7T2YeYDe0R7Aa0oz8pwQpjk3W7OoL3QrXIfYcuKTrIz6ffqC8lc3peaAyg==}
+  expo-contacts@57.0.2:
+    resolution: {integrity: sha512-jYJKZcCRhf9ud02mCB5QefKlBcwR8KFShyiRQNwahn728CfT5MbGjKjHTNUyzcn8afpZki63Iw0qGoiKvDM6/g==}
     peerDependencies:
       expo: '*'
       react: '*'
@@ -15065,7 +15065,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  expo-contacts@15.0.11(expo@54.0.35(@babel/core@7.29.0)(react-native-webview@13.15.0(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
+  expo-contacts@57.0.2(expo@54.0.35(@babel/core@7.29.0)(react-native-webview@13.15.0(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0):
     dependencies:
       expo: 54.0.35(@babel/core@7.29.0)(react-native-webview@13.15.0(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(patch_hash=68654180e8f8167eb28747e1f11d4b98a943d0be2c7a67be7b30d52e13750ac1)(@babel/core@7.29.0)(@react-native/metro-config@0.86.0(@babel/core@7.29.0))(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       react: 19.1.0
